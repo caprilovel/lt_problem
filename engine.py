@@ -1,8 +1,8 @@
 import torch 
 from sklearn.metrics import precision_recall_fscore_support
+from model.lora import CALora
 
-
-def train(model, dataloader, criterion, optimizer, test_loader, device, epochs=10, lora=False):
+def train(model, dataloader, criterion, optimizer, test_loader, device, epochs=10, use_lora=False, parser=None):
     
     for epoch in range(epochs):
         model.train()
@@ -23,8 +23,48 @@ def train(model, dataloader, criterion, optimizer, test_loader, device, epochs=1
         
         print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}, Accuracy: {100.*correct/total:.2f}%")
         evaluate(model, test_loader, device)
-    if lora:
-        pass 
+    if use_lora:
+        # train from scratch in first n epochs 
+        for epoch in range(epochs):
+            model.train()
+            total_loss = 0
+            correct = 0
+            total = 0
+            for images, labels in dataloader:
+                images, labels = images.to(device), labels.to(device)
+                optimizer.zero_grad()
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+                _, predicted = outputs.max(1)
+                correct += predicted.eq(labels).sum().item()
+                total += labels.size(0)
+            
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}, Accuracy: {100.*correct/total:.2f}%")
+            evaluate(model, test_loader, device)
+        model = CALora(model, r=8, lora_alpha=32, lora_dropout=0.1, merge_weights=True)
+        # fine-tune the model
+        for epoch in range(epochs):
+            model.train()
+            total_loss = 0
+            correct = 0
+            total = 0
+            for images, labels in dataloader:
+                images, labels = images.to(device), labels.to(device)
+                optimizer.zero_grad()
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+                _, predicted = outputs.max(1)
+                correct += predicted.eq(labels).sum().item()
+                total += labels.size(0)
+            
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}, Accuracy: {100.*correct/total:.2f}%")
+            evaluate(model, test_loader, device)
         
 
 def evaluate(model, dataloader, device):

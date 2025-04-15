@@ -93,7 +93,7 @@ class LoRAResNet18(nn.Module):
         return out
 
 
-class LoraLinear(nn.Module):
+class CALoraLinear(nn.Module):
     def __init__(self, base_layer, num_class, rank=8, alpha=16, top_k=1):
         super().__init__()
         self.base_layer = base_layer
@@ -134,6 +134,13 @@ class LoraLinear(nn.Module):
         
         return top_index
         
+    def _enable_lora(self,):
+        self.base_layer.requires_grad = False
+        self.lora_A.requires_grad = True
+        self.lora_B.requires_grad = True
+        
+        
+        self.enabled = True  # Set a flag to indicate LoRA is enabled
 
     def forward(self, x, pseudo_index=None):
         if pseudo_index == None:  # in the first round, only run the base layer and get the pseudo index 
@@ -169,116 +176,159 @@ class LoraLinear(nn.Module):
         self.base_layer.out_features = linear_layer.out_features
         
         
-class Lora(nn.Module):
-    def __init__(self, model, module=None, rank=8, alpha=16):
+# class Lora(nn.Module):
+#     def __init__(self, model, module=None, rank=8, alpha=16):
+#         super().__init__()
+#         self.model = model
+#         self.rank = rank
+#         self.alpha = alpha
+#         self.hooks = []
+#         self._apply_lora(module)
+#         self._register_hook()
+        
+#     def _register_hook(self,):
+#         for module in self.model.modules():        
+#             def hook(module, inputs, kwargs):
+#                 if 'pseudo_index' not in kwargs and hasattr(self, '_current_pseudo_index'):
+#                     kwargs['pseudo_index'] = self._current_pseudo_index
+#                 return inputs, kwargs 
+#             hook_handle = module.register_forward_pre_hook(hook, with_kwargs=True)
+#             self.hooks.append(hook_handle)
+            
+#     def _wrapper_forward(self, module):
+#         original_forward = module.forward
+
+#         def wrapped_forward(*args, **kwargs):
+#             pseudo_label = getattr(local_storage, 'pseudo_label', None)
+#             sig = inspect.signature(original_forward)
+#             params = sig.parameters
+
+#             # 如果原forward接受pseudo_label或**kwargs，则传递
+#             if 'pseudo_label' in params:
+#                 kwargs['pseudo_label'] = pseudo_label
+#             else:
+#                 # 检查是否有**kwargs
+#                 has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+#                 if has_kwargs and pseudo_label is not None:
+#                     kwargs['pseudo_label'] = pseudo_label
+
+#             return original_forward(*args, **kwargs)
+
+#         # 绑定新方法到模块
+#         module.forward = wrapped_forward.__get__(module, type(module))
+#         self.wrapped_modules.append(module)
+        
+                
+#     def remove_hooks(self):
+#         for hook in self.hooks:
+#             hook.remove()
+#         self.hooks.clear()
+        
+        
+#     def enable(self):
+#         for module in self.model.modules():
+#             if isinstance(module, LoraLinear):
+#                 module.base_layer.requires_grad = False
+#                 module.lora_A.requires_grad = True
+#                 module.lora_B.requires_grad = True
+
+#     def _apply_lora(self, module=None):
+#         if module is None:
+#             module = self.model
+            
+#         for name, child in module.named_children():
+#             if isinstance(child, nn.Linear):
+#                 new_layer = LoraLinear(child, self.rank, self.alpha)
+#                 setattr(module, name, new_layer)
+#             else:
+#                 self._apply_lora(child)
+
+    
+#     def forward(self, x, *args, **kwargs):
+#         """
+#         Forward pass through the model with LoRA adjustments.
+#         """
+#         # if 'pseudo_index' not in kwargs:
+#         #     kwargs['pseudo_index'] = None
+#         #     with torch.no_grad():
+#         #         pseduo_label = self.model(x, *args, **kwargs)
+#         #     return self.model(x, pseudo_index=pseduo_label, *args, **kwargs)
+#         # else:
+#         #     return self.model(x, pseudo_index=pseduo_label, *args, **kwargs)
+
+#         if 'pseudo_index' not in kwargs:
+#             with torch.no_grad():
+#                 pseudo_label = self.model(x, *args, **kwargs)
+#             print('pseudo_label', pseudo_label)
+#             # 保存伪标签到类里或其它地方（比如 self.pseudo_index），不要再传给整个模型
+#             kwargs['pseudo_index'] = pseudo_label
+#         return self.model(x, *args, **kwargs)
+
+class CALora(nn.Module):
+    def __init__(self, model, rank=8, alpha=16):
         super().__init__()
-        self.model = model
+        self.model = model  
+        
+        self.linear = model.fc
         self.rank = rank
         self.alpha = alpha
         self.hooks = []
-        self._apply_lora(module)
+        
+        self._apply_calora()
+        
         self._register_hook()
         
-    def _register_hook(self,):
-        # for name, module in self.model.named_modules():
-        #     def hook(module, input, output):
-        #         if hasattr(module, 'forward') and 'pseudo_index' in inspect.signature(module.forward).parameters:
-        #             pseudo_index = input['pseudo_index']
-        #             return module(input[0], pseudo_index)
-        #         else:
-        #             return module(input[0])
-        #     hook_handle = module.register_forward_hook(hook)
-        #     self.hooks.append(hook_handle)
-        # for name, module in self.model.named_modules():
-        # # 仅对LoraLinear模块注册处理pseudo_index的钩子
-        #     if isinstance(module, LoraLinear):
-        #         def hook(module, input, kwargs):
-        #             # 提取pseudo_index参数
-        #             pseudo_index = kwargs.get('pseudo_index', None)
-        #             # 调用模块的forward，传入pseudo_index
-        #             return module(input[0], pseudo_index=pseudo_index)
-        #         # 使用register_forward_pre_hook来修改输入参数
-        #         hook_handle = module.register_forward_pre_hook(
-        #             lambda m, input, kwargs: hook(m, input, kwargs)
-        #         )
-        #         self.hooks.append(hook_handle)
-        for module in self.model.modules():        
-            def hook(module, inputs, kwargs):
-                if 'pseudo_index' not in kwargs and hasattr(self, '_current_pseudo_index'):
-                    kwargs['pseudo_index'] = self._current_pseudo_index
-                return inputs, kwargs 
-            hook_handle = module.register_forward_pre_hook(hook, with_kwargs=True)
-            self.hooks.append(hook_handle)
-            
-    def _wrapper_forward(self, module):
-        original_forward = module.forward
-
-        def wrapped_forward(*args, **kwargs):
-            pseudo_label = getattr(local_storage, 'pseudo_label', None)
-            sig = inspect.signature(original_forward)
-            params = sig.parameters
-
-            # 如果原forward接受pseudo_label或**kwargs，则传递
-            if 'pseudo_label' in params:
-                kwargs['pseudo_label'] = pseudo_label
-            else:
-                # 检查是否有**kwargs
-                has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-                if has_kwargs and pseudo_label is not None:
-                    kwargs['pseudo_label'] = pseudo_label
-
-            return original_forward(*args, **kwargs)
-
-        # 绑定新方法到模块
-        module.forward = wrapped_forward.__get__(module, type(module))
-        self.wrapped_modules.append(module)
+        self._freeze_other_parameters()
         
-                
+    
+        
+        
+        
+    def _freeze_other_parameters(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.linear._enable_lora()
+        
+        
+    
+    def _apply_calora(self):
+        # module = model.fc
+        self.linear = CALoraLinear(self.linear, self.model.fc.in_features, self.rank, self.alpha)
+
+    
+    def _get_pseudo_label(self, x):
+        with torch.no_grad():
+            pseudo_label = self.model(x)
+        return pseudo_label 
+    
+    def _register_hook(self):
+        def hook_fn(module, input, output):
+            self.fc_input = input[0]  # 捕捉 fc 层的输入
+        
+        handle = self.model.fc.register_forward_hook(hook_fn)
+        self.hooks.append(handle)
+    
+    def forward(self, x):
+        pseudo_label = self._get_pseudo_label(x)
+        return self.linear(self.fc_input, pseudo_index=pseudo_label)
+        
     def remove_hooks(self):
         for hook in self.hooks:
             hook.remove()
         self.hooks.clear()
         
-        
-    def enable(self):
-        for module in self.model.modules():
-            if isinstance(module, LoraLinear):
-                module.base_layer.requires_grad = False
-                module.lora_A.requires_grad = True
-                module.lora_B.requires_grad = True
-
-    def _apply_lora(self, module=None):
-        if module is None:
-            module = self.model
-            
-        for name, child in module.named_children():
-            if isinstance(child, nn.Linear):
-                new_layer = LoraLinear(child, self.rank, self.alpha)
-                setattr(module, name, new_layer)
-            else:
-                self._apply_lora(child)
-
     
-    def forward(self, x, *args, **kwargs):
-        """
-        Forward pass through the model with LoRA adjustments.
-        """
-        # if 'pseudo_index' not in kwargs:
-        #     kwargs['pseudo_index'] = None
-        #     with torch.no_grad():
-        #         pseduo_label = self.model(x, *args, **kwargs)
-        #     return self.model(x, pseudo_index=pseduo_label, *args, **kwargs)
-        # else:
-        #     return self.model(x, pseudo_index=pseduo_label, *args, **kwargs)
 
-        if 'pseudo_index' not in kwargs:
-            with torch.no_grad():
-                pseudo_label = self.model(x, *args, **kwargs)
-            print('pseudo_label', pseudo_label)
-            # 保存伪标签到类里或其它地方（比如 self.pseudo_index），不要再传给整个模型
-            kwargs['pseudo_index'] = pseudo_label
-        return self.model(x, *args, **kwargs)
         
-            
-            
-            
+    
+
+
+if __name__ == "__main__":
+    x = torch.randn(2, 3, 32, 32)
+    model = models.resnet18(pretrained=False, num_classes=10)
+    lora_model = CALora(model, rank=8, alpha=16)
+    print(lora_model)
+    pseudo_label = lora_model._get_pseudo_label(x)
+    predict = lora_model(x)
+    print(pseudo_label.shape, pseudo_label)
+    print(predict.shape, predict)
