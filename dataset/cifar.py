@@ -6,7 +6,7 @@ import torchvision.transforms as transforms
 
 from torchvision import datasets, models
 
-def get_cifar_dataset(path='./data/'):
+def get_cifar_dataset(path='./data/', batch_size=128):
     data_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
@@ -29,11 +29,11 @@ def get_cifar_dataset(path='./data/'):
 
 
     long_tail_dataset = create_long_tail(dataset)
-    dataloader = DataLoader(long_tail_dataset, batch_size=128, shuffle=True, num_workers=4)
+    dataloader = DataLoader(long_tail_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
 
     test_dataset = datasets.CIFAR10(root=path, train=False, download=True, transform=data_transform)
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
     return dataloader, test_loader
 
 
