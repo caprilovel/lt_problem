@@ -30,9 +30,30 @@ def cosine_angle_loss(features, labels, class_centers):
     features = F.normalize(features, dim=1)
     centers = F.normalize(class_centers[labels], dim=1)
     cosine_sim = (features * centers)
-    print(cosine_sim.shape)
+    # print(cosine_sim.shape)
     cosine_sim = cosine_sim.sum(dim=1) 
     return 1 - cosine_sim.mean()
+
+def cosine_similarity_matrix(features, class_centers):
+    """
+    Compute cosine similarity between each feature and all class centers.
+    
+    Args:
+        features: Tensor of shape [batch_size, feature_dim]
+        class_centers: Tensor of shape [num_classes, feature_dim]
+    
+    Returns:
+        Tensor of shape [batch_size, num_classes] with cosine similarities
+    """
+    # Normalize both features and centers
+    features = F.normalize(features, dim=1)  # [B, D]
+    centers = F.normalize(class_centers, dim=1)  # [C, D]
+
+    # Compute cosine similarity: [B, C] = [B, D] @ [D, C]
+    cosine_sim = features @ centers.T
+    # softmax cosine similarity to get probabilities
+    cosine_sim = F.softmax(cosine_sim, dim=1)  # Optional: if you want probabilities
+    return cosine_sim  # shape: [batch_size, num_classes]
 
 
 
@@ -118,6 +139,33 @@ def get_plot(
     np.set_printoptions(precision=4, suppress=True)
     print("Cosine similarity matrix between class means and classifier weights:")
     print(sim_matrix.cpu().numpy())
+    
+    # features_norm = F.normalize(features.to(device), p=2, dim=1)  # [N, D]
+    # sim_to_weights = torch.matmul(features_norm, weights_norm.T)  # [N, 10]
+
+    # pred_labels = sim_to_weights.argmax(dim=1)
+    # correct = (pred_labels == labels.to(device)).sum().item()
+    # total = labels.size(0)
+    # accuracy = correct / total
+
+    # print(f"Cosine Similarity Classification Accuracy: {accuracy * 100:.2f}%")
+    features_norm = F.normalize(features.to(device), p=2, dim=1)  # [N, D]
+    sim_to_weights = torch.matmul(features_norm, weights_norm.T)  # [N, 10]
+
+    top1_preds = sim_to_weights.argmax(dim=1)
+    correct_top1 = (top1_preds == labels.to(device)).sum().item()
+
+    # Top-3 prediction
+    top3_preds = sim_to_weights.topk(3, dim=1).indices  # [N, 3]
+    correct_top3 = (top3_preds == labels.unsqueeze(1).to(device)).any(dim=1).sum().item()
+
+    total = labels.size(0)
+    acc_top1 = correct_top1 / total
+    acc_top3 = correct_top3 / total
+
+    print(f"Top-1 Cosine Similarity Accuracy: {acc_top1 * 100:.2f}%")
+    print(f"Top-3 Cosine Similarity Accuracy: {acc_top3 * 100:.2f}%")
+
 
 
 
@@ -145,7 +193,7 @@ def train(model, dataloader, criterion, optimizer, test_loader, device, epochs=1
             
             print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}, Accuracy: {100.*correct/total:.2f}%")
             evaluate(model, test_loader, device)
-            get_plot(model, dataloader, index=epoch)
+            get_plot(model, test_loader, index=epoch)
         
         model = CALora(model, rank=8, alpha=16).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
@@ -159,11 +207,14 @@ def train(model, dataloader, criterion, optimizer, test_loader, device, epochs=1
             for images, labels in dataloader:
                 images, labels = images.to(device), labels.to(device)
                 optimizer.zero_grad()
-                outputs = model(images)
+                
                 # loss = criterion(outputs, labels)
                 features = model.get_features(images)
                 # print(features.requires_grad)
-                loss = cosine_angle_loss(features, labels, class_centers)
+                # loss = cosine_angle_loss(features, labels, class_centers)
+                cosine_sim = cosine_similarity_matrix(features, class_centers)
+                outputs = model(images, pseudo_index=cosine_sim)
+                loss = criterion(outputs, labels) * 0.1
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()

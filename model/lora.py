@@ -176,7 +176,7 @@ class CALoraLinear(nn.Module):
         self.base_layer.out_features = linear_layer.out_features
 
 class UCALoraLinear(nn.Module):
-    def __init__(self, base_layer, num_class, rank=10, alpha=16, top_k=1):
+    def __init__(self, base_layer, num_class, rank=10, alpha=16, top_k=3):
         super().__init__()
         self.base_layer = base_layer
         self.num_class = num_class
@@ -408,8 +408,13 @@ class CALora(nn.Module):
         self.model.fc._enable_lora()
         self.fc = self.model.fc  # 保存对 LoRA 层的引用
 
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, x, pseudo_index=None):
+        if pseudo_index is None:
+            return self.model(x)
+        else:
+            features = self.model.get_features(x)
+            return self.fc(features, pseudo_index=pseudo_index)
+        
 
     def get_features(self, x):
         return self.model.get_features(x)
